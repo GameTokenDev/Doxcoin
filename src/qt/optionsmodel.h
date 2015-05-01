@@ -33,6 +33,8 @@ public:
         CoinControlFeatures, // bool
         MinimizeCoinAge,   // bool
         UseBlackTheme,     // bool
+        DarksendRounds,    // int
+        anonymizedoxAmount, //int
         OptionIDRowCount,
     };
 
@@ -63,6 +65,8 @@ signals:
     void transactionFeeChanged(qint64);
     void reserveBalanceChanged(qint64);
     void coinControlFeaturesChanged(bool);
+    void darksendRoundsChanged(int);
+    void anonymizedoxAmountChanged(int);
 };
 
 #endif // OPTIONSMODEL_H

@@ -9,7 +9,7 @@ LINK:=$(CXX)
 ARCH:=$(system lscpu | head -n 1 | awk '{print $2}')
 
 DEFS=-DBOOST_SPIRIT_THREADSAFE
-
+DEFS += -DUSE_SECP256K1
 DEFS += $(addprefix -I,$(CURDIR) $(CURDIR)/obj $(BOOST_INCLUDE_PATH) $(BDB_INCLUDE_PATH) $(OPENSSL_INCLUDE_PATH))
 LIBS = $(addprefix -L,$(BOOST_LIB_PATH) $(BDB_LIB_PATH) $(OPENSSL_LIB_PATH))
 
@@ -21,6 +21,10 @@ ifdef STATIC
 		LMODE2 = static
 	endif
 endif
+
+LIBS += \
+ -Wl,-B$(LMODE) \
+   -l secp256k1
 
 # for boost 1.37, add -mt to the boost libraries
 LIBS += \
@@ -135,7 +139,24 @@ OBJS= \
     obj/scrypt-x86.o \
     obj/scrypt-x86_64.o \
     obj/chainparams.o \
-    obj/irc.o
+    obj/irc.o \
+    obj/stealth.o \
+    obj/activemasternode.o \
+    obj/darksend.o \
+    obj/eccryptoverify.o \
+    obj/instantx.o \
+    obj/keepass.o \
+    obj/masternodeconfig.o \
+    obj/masternode.o \
+    obj/rpcdarksend.o \
+    obj/spork.o \
+    obj/crypto/hmac_sha256.o \
+    obj/crypto/hmac_sha512.o \
+    obj/crypto/rfc6979_hmac_sha256.o \
+    obj/crypto/ripemd160.o \
+    obj/crypto/sha1.o \
+    obj/crypto/sha256.o \
+    obj/crypto/sha512.o
 
 ifeq (${USE_WALLET}, 1)
     DEFS += -DENABLE_WALLET

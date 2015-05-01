@@ -10,8 +10,13 @@
 #include <string>
 #include <vector>
 #include <boost/foreach.hpp>
+#include <openssl/crypto.h>
+#include <openssl/ec.h>
+#include <openssl/ecdh.h>
+#include <openssl/sha.h>
 #include <openssl/aes.h>
 #include <openssl/evp.h>
+#include <openssl/hmac.h>
 #ifdef WIN32
 #include <windows.h>
 #endif
@@ -137,6 +142,73 @@ bool DecryptSecret(const CKeyingMaterial& vMasterKey, const std::vector<unsigned
     return cKeyCrypter.Decrypt(vchCiphertext, *((CKeyingMaterial*)&vchPlaintext));
 }
 
+// General secure AES 256 CBC encryption routine
+bool EncryptAES256(const SecureString& sKey, const SecureString& sPlaintext, const std::string& sIV, std::string& sCiphertext)
+{
+    // max ciphertext len for a n bytes of plaintext is
+    // n + AES_BLOCK_SIZE - 1 bytes
+    int nLen = sPlaintext.size();
+    int nCLen = nLen + AES_BLOCK_SIZE;
+    int nFLen = 0;
+
+    // Verify key sizes
+    if(sKey.size() != 32 || sIV.size() != AES_BLOCK_SIZE) {
+        LogPrintf("crypter EncryptAES256 - Invalid key or block size: Key: %d sIV:%d\n", sKey.size(), sIV.size());
+        return false;
+    }
+
+    // Prepare output buffer
+    sCiphertext.resize(nCLen);
+
+    // Perform the encryption
+    EVP_CIPHER_CTX ctx;
+
+    bool fOk = true;
+
+    EVP_CIPHER_CTX_init(&ctx);
+    if (fOk) fOk = EVP_EncryptInit_ex(&ctx, EVP_aes_256_cbc(), NULL, (const unsigned char*) &sKey[0], (const unsigned char*) &sIV[0]);
+    if (fOk) fOk = EVP_EncryptUpdate(&ctx, (unsigned char*) &sCiphertext[0], &nCLen, (const unsigned char*) &sPlaintext[0], nLen);
+    if (fOk) fOk = EVP_EncryptFinal_ex(&ctx, (unsigned char*) (&sCiphertext[0])+nCLen, &nFLen);
+    EVP_CIPHER_CTX_cleanup(&ctx);
+
+    if (!fOk) return false;
+
+    sCiphertext.resize(nCLen + nFLen);
+    return true;
+}
+
+bool DecryptAES256(const SecureString& sKey, const std::string& sCiphertext, const std::string& sIV, SecureString& sPlaintext)
+{
+    // plaintext will always be equal to or lesser than length of ciphertext
+    int nLen = sCiphertext.size();
+    int nPLen = nLen, nFLen = 0;
+
+    // Verify key sizes
+    if(sKey.size() != 32 || sIV.size() != AES_BLOCK_SIZE) {
+        LogPrintf("crypter DecryptAES256 - Invalid key or block size\n");
+        return false;
+    }
+
+    sPlaintext.resize(nPLen);
+
+    EVP_CIPHER_CTX ctx;
+
+    bool fOk = true;
+
+    EVP_CIPHER_CTX_init(&ctx);
+    if (fOk) fOk = EVP_DecryptInit_ex(&ctx, EVP_aes_256_cbc(), NULL, (const unsigned char*) &sKey[0], (const unsigned char*) &sIV[0]);
+    if (fOk) fOk = EVP_DecryptUpdate(&ctx, (unsigned char *) &sPlaintext[0], &nPLen, (const unsigned char *) &sCiphertext[0], nLen);
+    if (fOk) fOk = EVP_DecryptFinal_ex(&ctx, (unsigned char *) (&sPlaintext[0])+nPLen, &nFLen);
+    EVP_CIPHER_CTX_cleanup(&ctx);
+
+    if (!fOk) return false;
+
+    sPlaintext.resize(nPLen + nFLen);
+    return true;
+}
+
+
+
 bool CCryptoKeyStore::SetCrypted()
 {
     LOCK(cs_KeyStore);
@@ -148,7 +220,7 @@ bool CCryptoKeyStore::SetCrypted()
     return true;
 }
 
-bool CCryptoKeyStore::Lock()
+bool CCryptoKeyStore::LockKeyStore()
 {
     if (!SetCrypted())
         return false;
@@ -289,3 +361,82 @@ bool CCryptoKeyStore::EncryptKeys(CKeyingMaterial& vMasterKeyIn)
     }
     return true;
 }
+
+
+
+bool SecMsgCrypter::SetKey(const std::vector<unsigned char>& vchNewKey, unsigned char* chNewIV)
+{
+    
+    if (vchNewKey.size() < sizeof(chKey))
+        return false;
+    
+    return SetKey(&vchNewKey[0], chNewIV);
+};
+
+bool SecMsgCrypter::SetKey(const unsigned char* chNewKey, unsigned char* chNewIV)
+{
+    // -- for EVP_aes_256_cbc() key must be 256 bit, iv must be 128 bit.
+    memcpy(&chKey[0], chNewKey, sizeof(chKey));
+    memcpy(chIV, chNewIV, sizeof(chIV));
+    
+    fKeySet = true;
+    return true;
+};
+
+bool SecMsgCrypter::Encrypt(unsigned char* chPlaintext, uint32_t nPlain, std::vector<unsigned char> &vchCiphertext)
+{
+    if (!fKeySet)
+        return false;
+    
+    // -- max ciphertext len for a n bytes of plaintext is n + AES_BLOCK_SIZE - 1 bytes
+    int nLen = nPlain;
+    
+    int nCLen = nLen + AES_BLOCK_SIZE, nFLen = 0;
+    vchCiphertext = std::vector<unsigned char> (nCLen);
+
+    EVP_CIPHER_CTX ctx;
+
+    bool fOk = true;
+
+    EVP_CIPHER_CTX_init(&ctx);
+    if (fOk) fOk = EVP_EncryptInit_ex(&ctx, EVP_aes_256_cbc(), NULL, &chKey[0], &chIV[0]);
+    if (fOk) fOk = EVP_EncryptUpdate(&ctx, &vchCiphertext[0], &nCLen, chPlaintext, nLen);
+    if (fOk) fOk = EVP_EncryptFinal_ex(&ctx, (&vchCiphertext[0])+nCLen, &nFLen);
+    EVP_CIPHER_CTX_cleanup(&ctx);
+
+    if (!fOk)
+        return false;
+
+    vchCiphertext.resize(nCLen + nFLen);
+    
+    return true;
+};
+
+bool SecMsgCrypter::Decrypt(unsigned char* chCiphertext, uint32_t nCipher, std::vector<unsigned char>& vchPlaintext)
+{
+    if (!fKeySet)
+        return false;
+    
+    // plaintext will always be equal to or lesser than length of ciphertext
+    int nPLen = nCipher, nFLen = 0;
+    
+    vchPlaintext.resize(nCipher);
+
+    EVP_CIPHER_CTX ctx;
+
+    bool fOk = true;
+
+    EVP_CIPHER_CTX_init(&ctx);
+    if (fOk) fOk = EVP_DecryptInit_ex(&ctx, EVP_aes_256_cbc(), NULL, &chKey[0], &chIV[0]);
+    if (fOk) fOk = EVP_DecryptUpdate(&ctx, &vchPlaintext[0], &nPLen, &chCiphertext[0], nCipher);
+    if (fOk) fOk = EVP_DecryptFinal_ex(&ctx, (&vchPlaintext[0])+nPLen, &nFLen);
+    EVP_CIPHER_CTX_cleanup(&ctx);
+
+    if (!fOk)
+        return false;
+    
+    vchPlaintext.resize(nPLen + nFLen);
+    
+    return true;
+};
+
